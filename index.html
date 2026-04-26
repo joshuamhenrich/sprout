@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sprout — Tween budgeting</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <h1>Sprout</h1>
+    <p>Tween mode prototype. Tap around — your data saves automatically.</p>
+    <button id="reset-btn" class="reset-btn">Reset to demo data</button>
+  </div>
+
+  <div class="phone">
+    <div class="notch"></div>
+
+    <div class="screen-container">
+      <div class="screen active" id="home"></div>
+      <div class="screen" id="schedule"></div>
+      <div class="screen" id="jars"></div>
+      <div class="screen" id="goals"></div>
+      <div class="screen" id="goal-detail"></div>
+
+      <div class="modal-overlay" id="modal">
+        <div class="modal" id="modal-content"></div>
+      </div>
+    </div>
+
+    <div class="nav-bar" id="nav-bar"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
