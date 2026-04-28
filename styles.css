@@ -127,6 +127,14 @@ body {
   font-weight: 700;
   color: var(--text);
 }
+.status-dots {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 8px;
+  transition: background 0.12s;
+  letter-spacing: 2px;
+}
+.status-dots:active { background: var(--border); }
 
 .screen-container {
   flex: 1;

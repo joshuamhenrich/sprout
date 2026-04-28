@@ -306,6 +306,10 @@ function goalCardHtml(g, opts = {}) {
   `;
 }
 
+function statusBarHtml() {
+  return `<div class="status-bar"><span>9:41</span><span class="status-dots" onclick="openQuickSettings()">•••</span></div>`;
+}
+
 function avatarHtml(size) {
   const { avatarEmoji, avatar } = state.user;
   if (size === 'small') {
@@ -329,7 +333,7 @@ function renderHome() {
   const cols = allJarIds.length <= 3 ? allJarIds.length : 3;
 
   document.getElementById('home').innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="top-bar">
       <div class="greeting">Hey, ${escape(state.user.name)} 👋</div>
       ${avatarHtml('small')}
@@ -379,7 +383,7 @@ function renderSchedule() {
     groups[it.nextDate].push(it);
   });
   document.getElementById('schedule').innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="screen-header">
       <div class="back-btn" onclick="navigate('home')">‹</div>
       <div class="screen-title">Schedule</div>
@@ -413,7 +417,7 @@ function renderJars() {
   const amtInlineStyle = isFixed ? '' : `style="color:${meta.color}"`;
 
   document.getElementById('jars').innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="screen-header">
       <div class="back-btn" onclick="navigate('home')">‹</div>
       <div class="screen-title">Jars</div>
@@ -451,7 +455,7 @@ function renderJars() {
 // ---------- Render: Goals ----------
 function renderGoals() {
   document.getElementById('goals').innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="screen-header">
       <div class="back-btn" onclick="navigate('home')">‹</div>
       <div class="screen-title">Goals</div>
@@ -484,7 +488,7 @@ function renderGoalDetail() {
   const recent = recentForGoal(g.id);
 
   el.innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="screen-header">
       <div class="back-btn" onclick="navigate('goals')">‹</div>
       <div class="screen-title">Goal</div>
@@ -522,7 +526,7 @@ function renderProfile() {
   const customJars = state.customJars || [];
 
   document.getElementById('profile').innerHTML = `
-    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    ${statusBarHtml()}
     <div class="screen-header">
       <div class="back-btn" onclick="navigate('home')">‹</div>
       <div class="screen-title">Profile</div>
@@ -998,6 +1002,55 @@ function submitSplits(e) {
   updateSplits({ save: save / 100, spend: spend / 100, give: give / 100 });
 }
 
+function openQuickSettings() {
+  const isDark = state.theme === 'dark';
+  const savePct  = Math.round(state.splits.save  * 100);
+  const spendPct = Math.round(state.splits.spend * 100);
+  const givePct  = Math.round(state.splits.give  * 100);
+  const { name, avatarEmoji, avatar } = state.user;
+
+  openModal(`
+    <div class="modal-handle"></div>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:18px;">
+      <div class="avatar${avatarEmoji ? ' avatar-emoji' : ''}" style="width:44px;height:44px;font-size:${avatarEmoji ? '24px' : '17px'};flex-shrink:0;">${escape(avatarEmoji || avatar)}</div>
+      <div>
+        <div style="font-size:17px;font-weight:800;">${escape(name)}</div>
+        <div style="font-size:12px;color:var(--text-soft);">Auto-split ${savePct}/${spendPct}/${givePct}</div>
+      </div>
+    </div>
+
+    <div style="background:var(--bg);border-radius:16px;overflow:hidden;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;padding:14px 16px;gap:12px;border-bottom:1px solid var(--border);">
+        <div style="width:34px;height:34px;border-radius:10px;background:rgba(155,109,215,0.12);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;">${isDark ? '🌙' : '☀️'}</div>
+        <div style="flex:1;font-size:14px;font-weight:700;">Dark mode</div>
+        <div class="theme-toggle-track ${isDark ? 'on' : ''}" onclick="toggleTheme()">
+          <div class="theme-toggle-thumb"></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;padding:14px 16px;gap:12px;cursor:pointer;" onclick="closeModal(); navigate('profile');">
+        <div style="width:34px;height:34px;border-radius:10px;background:rgba(255,123,84,0.12);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;">👤</div>
+        <div style="flex:1;font-size:14px;font-weight:700;">Edit profile</div>
+        <div style="font-size:16px;color:var(--text-muted);">›</div>
+      </div>
+    </div>
+
+    <div style="background:var(--bg);border-radius:16px;overflow:hidden;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;padding:14px 16px;gap:12px;cursor:pointer;" onclick="closeModal(); openLogMoneyModal();">
+        <div style="width:34px;height:34px;border-radius:10px;background:rgba(76,175,124,0.12);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;">💵</div>
+        <div style="flex:1;font-size:14px;font-weight:700;">Log money</div>
+        <div style="font-size:16px;color:var(--text-muted);">›</div>
+      </div>
+      <div style="display:flex;align-items:center;padding:14px 16px;gap:12px;border-top:1px solid var(--border);cursor:pointer;" onclick="closeModal(); openAddJarModal();">
+        <div style="width:34px;height:34px;border-radius:10px;background:rgba(59,130,246,0.12);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;">🫙</div>
+        <div style="flex:1;font-size:14px;font-weight:700;">Add jar</div>
+        <div style="font-size:16px;color:var(--text-muted);">›</div>
+      </div>
+    </div>
+
+    <button class="modal-close" onclick="closeModal()">Close</button>
+  `);
+}
+
 // ---------- Init ----------
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme();
@@ -1048,3 +1101,4 @@ window.toggleTheme = toggleTheme;
 window.setAvatar = setAvatar;
 window.confirmDeleteJar = confirmDeleteJar;
 window.updateSplitHint = updateSplitHint;
+window.openQuickSettings = openQuickSettings;
