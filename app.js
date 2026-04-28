@@ -8,6 +8,19 @@
 // ---------- Storage ----------
 const STORAGE_KEY = 'sprout_v1';
 
+function freshState() {
+  return {
+    user: { name: '', avatar: '?', avatarEmoji: null },
+    theme: 'light',
+    splits: { save: 0.5, spend: 0.4, give: 0.1 },
+    customJars: [],
+    onboarded: false,
+    transactions: [],
+    goals: [],
+    scheduleItems: []
+  };
+}
+
 function seedState() {
   return {
     user: { name: 'Alex', avatar: 'A', avatarEmoji: null },
@@ -39,14 +52,15 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      // Migrate old state that may be missing new fields
+      // Migrate older saves that predate new fields
       if (!s.theme) s.theme = 'light';
       if (!s.customJars) s.customJars = [];
       if (!s.user.avatarEmoji) s.user.avatarEmoji = null;
+      if (s.onboarded === undefined) s.onboarded = true; // existing saves skip onboarding
       return s;
     }
   } catch (e) { /* fall through */ }
-  return seedState();
+  return freshState(); // brand-new user → onboarding
 }
 
 function saveState() {
@@ -61,6 +75,9 @@ let state = loadState();
 let currentScreen = 'home';
 let currentJar = 'save';
 let currentGoalId = null;
+let obStep = 0;          // onboarding step: 0=welcome 1=name 2=avatar 3=splits
+let obName = '';
+let obAvatarEmoji = null;
 
 // ---------- Jar helpers ----------
 const FIXED_JAR_META = {
@@ -321,6 +338,165 @@ function avatarHtml(size) {
       <div class="profile-avatar-edit">✏️</div>
     </div>
   `;
+}
+
+// ---------- Render: Onboarding ----------
+function stepDots(current, total) {
+  return `<div class="ob-step-dots">${Array.from({length: total}, (_, i) =>
+    `<div class="ob-dot ${i === current ? 'active' : ''}"></div>`).join('')}</div>`;
+}
+
+function renderOnboarding() {
+  const el = document.getElementById('onboarding');
+  const firstName = obName.split(' ')[0] || 'there';
+
+  if (obStep === 0) {
+    el.innerHTML = `
+      <div class="ob-screen">
+        <div class="ob-hero-emoji">🌱</div>
+        <div class="ob-title">Welcome to Sprout</div>
+        <div class="ob-sub">The fun way to grow your savings, track your spending, and learn about money.</div>
+        <button class="ob-btn" onclick="goObStep(1)">Let's get started →</button>
+        <button class="ob-btn-ghost" onclick="loadDemo()">Use demo account instead</button>
+      </div>
+    `;
+  } else if (obStep === 1) {
+    el.innerHTML = `
+      <div class="ob-screen">
+        ${stepDots(0, 3)}
+        <div class="ob-hero-emoji">👋</div>
+        <div class="ob-title">What's your name?</div>
+        <div class="ob-sub">This is how Sprout will greet you every day.</div>
+        <form class="ob-form" onsubmit="obNameSubmit(event)">
+          <label class="form-label">Your name</label>
+          <input id="ob-name-input" class="form-input" type="text" placeholder="e.g. Jordan" maxlength="20" required autofocus value="${escape(obName)}">
+          <button type="submit" class="ob-btn" style="margin-top:20px;">Continue →</button>
+        </form>
+      </div>
+    `;
+    setTimeout(() => document.getElementById('ob-name-input')?.focus(), 50);
+  } else if (obStep === 2) {
+    const initial = (obName[0] || '?').toUpperCase();
+    el.innerHTML = `
+      <div class="ob-screen">
+        ${stepDots(1, 3)}
+        <div class="ob-hero-emoji">${obAvatarEmoji || '🙂'}</div>
+        <div class="ob-title">Pick your look,<br>${escape(firstName)}!</div>
+        <div class="ob-sub" style="margin-bottom:20px;">Choose an avatar — or keep your initial.</div>
+        <div class="ob-avatar-grid">
+          ${AVATAR_EMOJIS.map(em => `
+            <div class="ob-avatar-opt ${obAvatarEmoji === em ? 'selected' : ''}" onclick="obPickAvatar('${em}')">
+              ${em}
+            </div>
+          `).join('')}
+          <div class="ob-avatar-opt ${obAvatarEmoji === null ? 'selected' : ''}" onclick="obPickAvatar(null)">
+            <span class="ob-avatar-initial">${escape(initial)}</span>
+          </div>
+        </div>
+        <button class="ob-btn" onclick="goObStep(3)">Continue →</button>
+      </div>
+    `;
+  } else if (obStep === 3) {
+    const s = state.splits;
+    const sv = Math.round(s.save * 100);
+    const sp = Math.round(s.spend * 100);
+    const gv = Math.round(s.give * 100);
+    el.innerHTML = `
+      <div class="ob-screen">
+        ${stepDots(2, 3)}
+        <div class="ob-hero-emoji">🫙</div>
+        <div class="ob-title">Set your jar splits</div>
+        <div class="ob-sub" style="margin-bottom:20px;">When money comes in, Sprout splits it across your jars. You can change this anytime.</div>
+        <form class="ob-form" onsubmit="obSplitsSubmit(event)" style="width:100%;">
+          <div class="ob-splits-row">
+            <div class="ob-split-card">
+              <div class="ob-split-emoji">🌱</div>
+              <div class="ob-split-label">Save</div>
+              <input class="ob-split-input" type="number" id="ob-save" name="save" min="0" max="100" value="${sv}" oninput="obSplitHint()">
+              <div class="ob-split-suffix">%</div>
+            </div>
+            <div class="ob-split-card">
+              <div class="ob-split-emoji">🛍️</div>
+              <div class="ob-split-label">Spend</div>
+              <input class="ob-split-input" type="number" id="ob-spend" name="spend" min="0" max="100" value="${sp}" oninput="obSplitHint()">
+              <div class="ob-split-suffix">%</div>
+            </div>
+            <div class="ob-split-card">
+              <div class="ob-split-emoji">💛</div>
+              <div class="ob-split-label">Give</div>
+              <input class="ob-split-input" type="number" id="ob-give" name="give" min="0" max="100" value="${gv}" oninput="obSplitHint()">
+              <div class="ob-split-suffix">%</div>
+            </div>
+          </div>
+          <div class="ob-hint ok" id="ob-split-hint">✓ Adds up to 100%</div>
+          <button type="submit" class="ob-btn">All done — let's go! 🎉</button>
+        </form>
+      </div>
+    `;
+  }
+}
+
+function goObStep(n) {
+  obStep = n;
+  renderOnboarding();
+}
+
+function obNameSubmit(e) {
+  e.preventDefault();
+  const val = document.getElementById('ob-name-input').value.trim();
+  if (!val) return;
+  obName = val;
+  goObStep(2);
+}
+
+function obPickAvatar(emoji) {
+  obAvatarEmoji = emoji;
+  renderOnboarding();
+}
+
+function obSplitHint() {
+  const sv = parseInt(document.getElementById('ob-save')?.value || 0, 10);
+  const sp = parseInt(document.getElementById('ob-spend')?.value || 0, 10);
+  const gv = parseInt(document.getElementById('ob-give')?.value || 0, 10);
+  const sum = sv + sp + gv;
+  const hint = document.getElementById('ob-split-hint');
+  if (!hint) return;
+  if (sum === 100) { hint.textContent = '✓ Adds up to 100%'; hint.className = 'ob-hint ok'; }
+  else if (sum < 100) { hint.textContent = `${sum}% — need ${100 - sum}% more`; hint.className = 'ob-hint warn'; }
+  else { hint.textContent = `${sum}% — ${sum - 100}% too much`; hint.className = 'ob-hint err'; }
+}
+
+function obSplitsSubmit(e) {
+  e.preventDefault();
+  const sv = parseInt(document.getElementById('ob-save').value, 10);
+  const sp = parseInt(document.getElementById('ob-spend').value, 10);
+  const gv = parseInt(document.getElementById('ob-give').value, 10);
+  if (sv + sp + gv !== 100) { obSplitHint(); return; }
+  completeOnboarding(sv / 100, sp / 100, gv / 100);
+}
+
+function completeOnboarding(save, spend, give) {
+  const name = obName || 'Friend';
+  const initial = name[0].toUpperCase();
+  state.user.name = name;
+  state.user.avatarEmoji = obAvatarEmoji;
+  state.user.avatar = obAvatarEmoji ? obAvatarEmoji : initial;
+  state.splits = { save, spend, give };
+  state.onboarded = true;
+  saveState();
+  applyTheme();
+  navigate('home');
+  render();
+}
+
+function loadDemo() {
+  localStorage.removeItem(STORAGE_KEY);
+  state = seedState();
+  state.onboarded = true;
+  saveState();
+  applyTheme();
+  navigate('home');
+  render();
 }
 
 // ---------- Render: Home ----------
@@ -608,6 +784,10 @@ function renderProfile() {
 
 // ---------- Render: Nav ----------
 function renderNav() {
+  if (!state.onboarded) {
+    document.getElementById('nav-bar').innerHTML = '';
+    return;
+  }
   document.getElementById('nav-bar').innerHTML = `
     <div class="nav-item ${currentScreen === 'home' ? 'active' : ''}" onclick="navigate('home')">
       <div class="nav-icon">🏠</div><div>Home</div>
@@ -628,6 +808,11 @@ function renderNav() {
 }
 
 function render() {
+  if (!state.onboarded) {
+    renderOnboarding();
+    renderNav();
+    return;
+  }
   renderHome();
   renderSchedule();
   renderJars();
@@ -638,6 +823,14 @@ function render() {
 }
 
 function navigate(screen) {
+  // During onboarding, only allow the onboarding screen
+  if (!state.onboarded) {
+    currentScreen = 'onboarding';
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('onboarding').classList.add('active');
+    renderNav();
+    return;
+  }
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screen).classList.add('active');
@@ -1061,9 +1254,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (confirm('Reset all data to demo? Goals, transactions, and schedule items you added will be erased.')) {
       localStorage.removeItem(STORAGE_KEY);
       state = seedState();
+      state.onboarded = true;
       saveState();
       currentJar = 'save';
       currentGoalId = null;
+      obStep = 0; obName = ''; obAvatarEmoji = null;
       applyTheme();
       navigate('home');
       render();
@@ -1075,7 +1270,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   render();
-  navigate('home');
+  navigate(state.onboarded ? 'home' : 'onboarding');
 });
 
 // Expose for inline handlers
@@ -1102,3 +1297,9 @@ window.setAvatar = setAvatar;
 window.confirmDeleteJar = confirmDeleteJar;
 window.updateSplitHint = updateSplitHint;
 window.openQuickSettings = openQuickSettings;
+window.goObStep = goObStep;
+window.obNameSubmit = obNameSubmit;
+window.obPickAvatar = obPickAvatar;
+window.obSplitHint = obSplitHint;
+window.obSplitsSubmit = obSplitsSubmit;
+window.loadDemo = loadDemo;
