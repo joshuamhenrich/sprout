@@ -10,8 +10,10 @@ const STORAGE_KEY = 'sprout_v1';
 
 function seedState() {
   return {
-    user: { name: 'Alex', avatar: 'A' },
+    user: { name: 'Alex', avatar: 'A', avatarEmoji: null },
+    theme: 'light',
     splits: { save: 0.5, spend: 0.4, give: 0.1 },
+    customJars: [],
     transactions: [
       { id: 't1', type: 'in', jar: 'save',  amount: 20, note: 'Birthday from Grandma',  date: '2026-04-12', goalId: 'g1' },
       { id: 't2', type: 'in', jar: 'save',  amount: 5,  note: 'Allowance auto-split',   date: '2026-04-19', goalId: null },
@@ -35,7 +37,14 @@ function seedState() {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const s = JSON.parse(raw);
+      // Migrate old state that may be missing new fields
+      if (!s.theme) s.theme = 'light';
+      if (!s.customJars) s.customJars = [];
+      if (!s.user.avatarEmoji) s.user.avatarEmoji = null;
+      return s;
+    }
   } catch (e) { /* fall through */ }
   return seedState();
 }
@@ -53,13 +62,37 @@ let currentScreen = 'home';
 let currentJar = 'save';
 let currentGoalId = null;
 
-// ---------- Helpers ----------
-const JAR_META = {
-  save:  { name: 'Save',  emoji: '🌱', color: 'save'  },
-  spend: { name: 'Spend', emoji: '🛍️', color: 'spend' },
-  give:  { name: 'Give',  emoji: '💛', color: 'give'  }
+// ---------- Jar helpers ----------
+const FIXED_JAR_META = {
+  save:  { id: 'save',  name: 'Save',  emoji: '🌱', color: '#4CAF7C', isFixed: true },
+  spend: { id: 'spend', name: 'Spend', emoji: '🛍️', color: '#FF7B54', isFixed: true },
+  give:  { id: 'give',  name: 'Give',  emoji: '💛', color: '#9B6DD7', isFixed: true }
 };
 
+const JAR_COLOR_PALETTE = [
+  '#3B82F6', '#F59E0B', '#EC4899', '#14B8A6', '#6366F1', '#EF4444'
+];
+
+const AVATAR_EMOJIS = ['🧒','👦','👧','🌟','🦸','🐱','🦊','🐸','🎈','🚀','🌈','🎯'];
+
+function getJarMeta(jarId) {
+  if (FIXED_JAR_META[jarId]) return FIXED_JAR_META[jarId];
+  const custom = (state.customJars || []).find(j => j.id === jarId);
+  return custom || { id: jarId, name: jarId, emoji: '🫙', color: '#6B7280', isFixed: false };
+}
+
+function getAllJarIds() {
+  return ['save', 'spend', 'give', ...(state.customJars || []).map(j => j.id)];
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ---------- Other helpers ----------
 function uid() { return 'x' + Math.random().toString(36).slice(2, 9); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function fmt(n) { return '$' + (Math.round(Math.abs(n) * 100) / 100).toFixed(2); }
@@ -69,6 +102,21 @@ function escape(s) {
     ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
+// ---------- Theme ----------
+function applyTheme() {
+  const theme = state.theme || 'light';
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode';
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  saveState();
+  applyTheme();
+  render();
+}
+
 // ---------- Computed ----------
 function jarBalance(jar) {
   return state.transactions
@@ -76,7 +124,7 @@ function jarBalance(jar) {
     .reduce((s, t) => s + (t.type === 'in' ? t.amount : -t.amount), 0);
 }
 function totalBalance() {
-  return jarBalance('save') + jarBalance('spend') + jarBalance('give');
+  return getAllJarIds().reduce((sum, j) => sum + jarBalance(j), 0);
 }
 function goalProgress(goalId) {
   return state.transactions
@@ -162,6 +210,29 @@ function addScheduleItem({ type, title, amount, recurrence, nextDate, conditiona
   saveState();
   render();
 }
+function addCustomJar({ name, emoji, color }) {
+  state.customJars.push({ id: uid(), name, emoji: emoji || '🫙', color, isFixed: false });
+  saveState();
+  render();
+}
+function deleteCustomJar(jarId) {
+  state.customJars = state.customJars.filter(j => j.id !== jarId);
+  if (currentJar === jarId) currentJar = 'save';
+  saveState();
+  render();
+}
+function updateUser({ name, avatarEmoji }) {
+  state.user.name = name;
+  state.user.avatarEmoji = avatarEmoji || null;
+  state.user.avatar = avatarEmoji ? avatarEmoji : (name[0] || 'A').toUpperCase();
+  saveState();
+  render();
+}
+function updateSplits({ save, spend, give }) {
+  state.splits = { save, spend, give };
+  saveState();
+  render();
+}
 
 // ---------- Date formatting ----------
 function formatDate(iso) {
@@ -219,17 +290,31 @@ function activityHtml(t) {
 function goalCardHtml(g, opts = {}) {
   const progress = goalProgress(g.id);
   const pct = Math.min(100, (progress / g.target) * 100);
-  const meta = opts.showJar ? ` · in ${JAR_META[g.jar].name}` : '';
+  const meta = getJarMeta(g.jar);
+  const metaText = opts.showJar ? ` · in ${meta.name}` : '';
   return `
     <div class="goal-card" style="margin: 0 0 10px;" onclick="openGoalDetail('${g.id}')">
       <div class="goal-row">
         <div class="goal-thumb">${escape(g.emoji)}</div>
         <div class="goal-info">
           <div class="goal-name">${escape(g.name)}</div>
-          <div class="goal-progress-text">${fmt(progress)} of ${fmt(g.target)}${meta}</div>
+          <div class="goal-progress-text">${fmt(progress)} of ${fmt(g.target)}${metaText}</div>
         </div>
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div>
+    </div>
+  `;
+}
+
+function avatarHtml(size) {
+  const { avatarEmoji, avatar } = state.user;
+  if (size === 'small') {
+    return `<div class="avatar${avatarEmoji ? ' avatar-emoji' : ''}" onclick="navigate('profile')">${escape(avatarEmoji || avatar)}</div>`;
+  }
+  return `
+    <div class="profile-avatar${avatarEmoji ? ' avatar-emoji' : ''}" onclick="openAvatarModal()">
+      ${escape(avatarEmoji || avatar)}
+      <div class="profile-avatar-edit">✏️</div>
     </div>
   `;
 }
@@ -240,27 +325,35 @@ function renderHome() {
   const recentIn = thisWeekIncome();
   const upcoming = upcomingSchedule(3);
   const activeGoal = state.goals[0];
+  const allJarIds = getAllJarIds();
+  const cols = allJarIds.length <= 3 ? allJarIds.length : 3;
 
   document.getElementById('home').innerHTML = `
     <div class="status-bar"><span>9:41</span><span>•••</span></div>
     <div class="top-bar">
-      <div class="greeting">Hey, ${escape(state.user.name)}</div>
-      <div class="avatar">${escape(state.user.avatar)}</div>
+      <div class="greeting">Hey, ${escape(state.user.name)} 👋</div>
+      ${avatarHtml('small')}
     </div>
     <div class="balance-card">
       <div class="balance-label">Total balance</div>
       <div class="balance-amount">${fmt(total)}</div>
       ${recentIn > 0 ? `<div class="balance-meta"><span class="pill-positive">+${fmt(recentIn)} this week</span></div>` : ''}
     </div>
-    <div class="section-h"><h3>My Jars</h3></div>
-    <div class="jars">
-      ${['save','spend','give'].map(j => `
-        <div class="jar ${j}" onclick="selectJar('${j}'); navigate('jars');">
-          <div class="jar-icon">${JAR_META[j].emoji}</div>
-          <div class="jar-name">${JAR_META[j].name}</div>
-          <div class="jar-amount">${fmt(jarBalance(j))}</div>
-        </div>
-      `).join('')}
+    <div class="section-h"><h3>My Jars</h3><span class="link" onclick="navigate('jars')">Manage</span></div>
+    <div class="jars" style="grid-template-columns: repeat(${cols}, 1fr);">
+      ${allJarIds.map(j => {
+        const meta = getJarMeta(j);
+        const isFixed = ['save','spend','give'].includes(j);
+        const iconStyle = isFixed ? '' : `style="background:${hexToRgba(meta.color, 0.15)}"`;
+        const amtStyle = isFixed ? '' : `style="color:${meta.color}"`;
+        return `
+          <div class="jar ${isFixed ? j : ''}" onclick="selectJar('${j}'); navigate('jars');">
+            <div class="jar-icon" ${iconStyle}>${meta.emoji}</div>
+            <div class="jar-name">${escape(meta.name)}</div>
+            <div class="jar-amount" ${amtStyle}>${fmt(jarBalance(j))}</div>
+          </div>
+        `;
+      }).join('')}
     </div>
     ${activeGoal ? `
       <div class="section-h"><h3>Active goal</h3><span class="link" onclick="navigate('goals')">See all</span></div>
@@ -311,9 +404,14 @@ function selectJar(jar) {
 }
 function renderJars() {
   const j = currentJar;
-  const meta = JAR_META[j];
+  const meta = getJarMeta(j);
+  const isFixed = ['save','spend','give'].includes(j);
   const goalsInJar = state.goals.filter(g => g.jar === j);
   const recent = recentForJar(j);
+  const allJarIds = getAllJarIds();
+  const amtColorClass = isFixed ? `jar-${j}` : '';
+  const amtInlineStyle = isFixed ? '' : `style="color:${meta.color}"`;
+
   document.getElementById('jars').innerHTML = `
     <div class="status-bar"><span>9:41</span><span>•••</span></div>
     <div class="screen-header">
@@ -321,16 +419,16 @@ function renderJars() {
       <div class="screen-title">Jars</div>
     </div>
     <div class="jar-tabs">
-      ${['save','spend','give'].map(jj => `
+      ${allJarIds.map(jj => `
         <div class="jar-tab ${jj === j ? 'active' : ''}" onclick="selectJar('${jj}')">
-          ${JAR_META[jj].emoji} ${JAR_META[jj].name}
+          ${getJarMeta(jj).emoji} ${escape(getJarMeta(jj).name)}
         </div>
       `).join('')}
     </div>
     <div class="jar-balance-card">
       <div class="jar-emoji-big">${meta.emoji}</div>
-      <div class="jar-balance-label">In your ${meta.name.toLowerCase()} jar</div>
-      <div class="jar-balance-amount jar-${j}">${fmt(jarBalance(j))}</div>
+      <div class="jar-balance-label">In your ${escape(meta.name.toLowerCase())} jar</div>
+      <div class="jar-balance-amount ${amtColorClass}" ${amtInlineStyle}>${fmt(jarBalance(j))}</div>
     </div>
     <div class="quick-actions">
       <div class="quick-btn" onclick="openLogMoneyModal('in', '${j}')"><span class="quick-btn-icon">📥</span>Add money</div>
@@ -346,6 +444,7 @@ function renderJars() {
     <div class="schedule-list" style="padding-bottom: 20px;">
       ${recent.length ? recent.map(activityHtml).join('') : '<div class="empty">No activity yet.</div>'}
     </div>
+    <div class="fab" onclick="openAddJarModal()">+</div>
   `;
 }
 
@@ -413,6 +512,96 @@ function renderGoalDetail() {
   `;
 }
 
+// ---------- Render: Profile ----------
+function renderProfile() {
+  const { name, avatarEmoji } = state.user;
+  const isDark = state.theme === 'dark';
+  const savePct = Math.round(state.splits.save * 100);
+  const spendPct = Math.round(state.splits.spend * 100);
+  const givePct = Math.round(state.splits.give * 100);
+  const customJars = state.customJars || [];
+
+  document.getElementById('profile').innerHTML = `
+    <div class="status-bar"><span>9:41</span><span>•••</span></div>
+    <div class="screen-header">
+      <div class="back-btn" onclick="navigate('home')">‹</div>
+      <div class="screen-title">Profile</div>
+    </div>
+
+    <div class="profile-hero">
+      ${avatarHtml('large')}
+      <div class="profile-name">${escape(name)}</div>
+      <div class="profile-name-sub">Tap your avatar to change it</div>
+    </div>
+
+    <div class="profile-section">
+      <div class="profile-row" onclick="openEditNameModal()">
+        <div class="profile-row-icon" style="background:rgba(255,123,84,0.12)">✏️</div>
+        <div class="profile-row-label">Display name</div>
+        <div class="profile-row-value">${escape(name)}</div>
+        <div class="profile-row-arrow">›</div>
+      </div>
+      <div class="profile-row" style="cursor:default;">
+        <div class="profile-row-icon" style="background:rgba(155,109,215,0.12)">${isDark ? '🌙' : '☀️'}</div>
+        <div class="profile-row-label">Dark mode</div>
+        <div class="theme-toggle-track ${isDark ? 'on' : ''}" onclick="toggleTheme()">
+          <div class="theme-toggle-thumb"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-h"><h3>Jar splits (auto-split)</h3></div>
+    <form onsubmit="submitSplits(event)">
+      <div class="splits-grid">
+        <div class="split-item">
+          <div class="split-emoji">🌱</div>
+          <div class="split-name">Save</div>
+          <input class="split-input" type="number" name="save" min="0" max="100" value="${savePct}" oninput="updateSplitHint()">
+          <div class="split-suffix">%</div>
+        </div>
+        <div class="split-item">
+          <div class="split-emoji">🛍️</div>
+          <div class="split-name">Spend</div>
+          <input class="split-input" type="number" name="spend" min="0" max="100" value="${spendPct}" oninput="updateSplitHint()">
+          <div class="split-suffix">%</div>
+        </div>
+        <div class="split-item">
+          <div class="split-emoji">💛</div>
+          <div class="split-name">Give</div>
+          <input class="split-input" type="number" name="give" min="0" max="100" value="${givePct}" oninput="updateSplitHint()">
+          <div class="split-suffix">%</div>
+        </div>
+      </div>
+      <div class="splits-hint ok" id="splits-hint">Save + Spend + Give = 100%</div>
+      <div style="padding: 8px 20px 18px;">
+        <button type="submit" class="btn-primary" style="width:100%; padding:14px; font-size:14px;">Save splits</button>
+      </div>
+    </form>
+
+    <div class="section-h"><h3>Custom jars</h3></div>
+    ${customJars.length ? `
+      <div style="background:var(--surface); margin: 0 20px; border-radius:20px; overflow:hidden; box-shadow:var(--shadow);">
+        ${customJars.map(cj => `
+          <div class="custom-jar-item">
+            <div class="custom-jar-dot" style="background:${hexToRgba(cj.color, 0.15)}">${cj.emoji}</div>
+            <div class="custom-jar-name">${escape(cj.name)}</div>
+            <div class="custom-jar-balance">${fmt(jarBalance(cj.id))}</div>
+            <button class="delete-btn" onclick="confirmDeleteJar('${cj.id}')">🗑️</button>
+          </div>
+        `).join('')}
+      </div>
+      <div style="padding: 12px 20px 0;">
+        <button class="quick-btn" style="width:100%;" onclick="openAddJarModal()"><span class="quick-btn-icon">➕</span>Add another jar</button>
+      </div>
+    ` : `
+      <div style="padding: 0 20px 8px;">
+        <button class="quick-btn" style="width:100%;" onclick="openAddJarModal()"><span class="quick-btn-icon">➕</span>Add a custom jar</button>
+      </div>
+      <div class="empty" style="padding-top: 4px;">Custom jars are for anything outside Save, Spend, or Give — like a travel fund or pet savings.</div>
+    `}
+  `;
+}
+
 // ---------- Render: Nav ----------
 function renderNav() {
   document.getElementById('nav-bar').innerHTML = `
@@ -428,6 +617,9 @@ function renderNav() {
     <div class="nav-item ${currentScreen === 'goals' || currentScreen === 'goal-detail' ? 'active' : ''}" onclick="navigate('goals')">
       <div class="nav-icon">🎯</div><div>Goals</div>
     </div>
+    <div class="nav-item ${currentScreen === 'profile' ? 'active' : ''}" onclick="navigate('profile')">
+      <div class="nav-icon">👤</div><div>Profile</div>
+    </div>
   `;
 }
 
@@ -437,6 +629,7 @@ function render() {
   renderJars();
   renderGoals();
   renderGoalDetail();
+  renderProfile();
   renderNav();
 }
 
@@ -474,6 +667,7 @@ function openLogMoneyModal(type, jar) {
   }
   const isIn = type === 'in';
   const defaultJar = jar || (isIn ? 'auto' : 'spend');
+  const allJarIds = getAllJarIds();
   openModal(`
     <div class="modal-handle"></div>
     <h3>${isIn ? 'Got money' : 'Spent money'}</h3>
@@ -498,16 +692,19 @@ function openLogMoneyModal(type, jar) {
             </div>
           </label>
         ` : ''}
-        ${['save','spend','give'].map(jj => `
-          <label class="jar-pick">
-            <input type="radio" name="jar" value="${jj}" ${defaultJar === jj ? 'checked' : ''}>
-            <div class="jar-pick-content">
-              <div class="jar-pick-emoji">${JAR_META[jj].emoji}</div>
-              <div class="jar-pick-name">${JAR_META[jj].name}</div>
-              <div class="jar-pick-meta">${fmt(jarBalance(jj))}</div>
-            </div>
-          </label>
-        `).join('')}
+        ${allJarIds.map(jj => {
+          const meta = getJarMeta(jj);
+          return `
+            <label class="jar-pick">
+              <input type="radio" name="jar" value="${jj}" ${defaultJar === jj ? 'checked' : ''}>
+              <div class="jar-pick-content">
+                <div class="jar-pick-emoji">${meta.emoji}</div>
+                <div class="jar-pick-name">${escape(meta.name)}</div>
+                <div class="jar-pick-meta">${fmt(jarBalance(jj))}</div>
+              </div>
+            </label>
+          `;
+        }).join('')}
       </div>
       <div class="form-actions">
         <button type="button" class="modal-close" onclick="closeModal()">Cancel</button>
@@ -531,6 +728,7 @@ function submitLogMoney(e, type) {
 
 function openAddGoalModal() {
   const emojis = ['🎮','🎧','📱','🎸','🚲','👟','🎫','📚','🎨','🛹','🎁','🎯'];
+  const allJarIds = getAllJarIds();
   openModal(`
     <div class="modal-handle"></div>
     <h3>New goal</h3>
@@ -542,6 +740,21 @@ function openAddGoalModal() {
       <div class="amount-input-wrapper">
         <span class="amount-prefix">$</span>
         <input class="form-input amount-input" type="number" step="1" min="1" name="target" required placeholder="100">
+      </div>
+      <label class="form-label">Which jar?</label>
+      <div class="jar-picker">
+        ${allJarIds.map((jj, i) => {
+          const meta = getJarMeta(jj);
+          return `
+            <label class="jar-pick">
+              <input type="radio" name="jar" value="${jj}" ${i === 0 ? 'checked' : ''}>
+              <div class="jar-pick-content">
+                <div class="jar-pick-emoji">${meta.emoji}</div>
+                <div class="jar-pick-name">${escape(meta.name)}</div>
+              </div>
+            </label>
+          `;
+        }).join('')}
       </div>
       <label class="form-label">Pick an icon</label>
       <div class="emoji-picker">
@@ -566,7 +779,7 @@ function submitAddGoal(e) {
   const name = f.name.value.trim();
   const target = parseFloat(f.target.value);
   if (!name || !Number.isFinite(target) || target <= 0) return;
-  addGoal({ name, target, emoji: f.emoji.value, jar: 'save' });
+  addGoal({ name, target, emoji: f.emoji.value, jar: f.jar.value });
   closeModal();
 }
 
@@ -574,10 +787,11 @@ function openAddToGoalModal(goalId) {
   const g = state.goals.find(x => x.id === goalId);
   if (!g) return;
   const jarBal = jarBalance(g.jar);
+  const meta = getJarMeta(g.jar);
   openModal(`
     <div class="modal-handle"></div>
     <h3>Add to ${escape(g.name)}</h3>
-    <p class="modal-sub">From your ${JAR_META[g.jar].name} jar — ${fmt(jarBal)} available</p>
+    <p class="modal-sub">From your ${escape(meta.name)} jar — ${fmt(jarBal)} available</p>
     <form onsubmit="submitAddToGoal(event, '${goalId}')">
       <label class="form-label">Amount</label>
       <div class="amount-input-wrapper">
@@ -654,8 +868,142 @@ function submitAddSchedule(e) {
   closeModal();
 }
 
+function openAddJarModal() {
+  const jarEmojis = ['🫙','💰','✈️','🎓','🏠','🎵','💊','⚽','🎂','🐕','🚗','💎'];
+  openModal(`
+    <div class="modal-handle"></div>
+    <h3>New jar</h3>
+    <p class="modal-sub">Create a custom jar for anything that doesn't fit the defaults.</p>
+    <form onsubmit="submitAddJar(event)">
+      <label class="form-label">Name</label>
+      <input class="form-input" type="text" name="name" required autofocus placeholder="Travel fund, pet savings...">
+      <label class="form-label">Pick an icon</label>
+      <div class="emoji-picker">
+        ${jarEmojis.map((em, i) => `
+          <label class="emoji-pick">
+            <input type="radio" name="emoji" value="${em}" ${i === 0 ? 'checked' : ''}>
+            <span>${em}</span>
+          </label>
+        `).join('')}
+      </div>
+      <label class="form-label">Pick a color</label>
+      <div class="color-picker">
+        ${JAR_COLOR_PALETTE.map((c, i) => `
+          <label class="color-pick">
+            <input type="radio" name="color" value="${c}" ${i === 0 ? 'checked' : ''}>
+            <span style="background:${c}"></span>
+          </label>
+        `).join('')}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="modal-close" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Create jar</button>
+      </div>
+    </form>
+  `);
+}
+
+function submitAddJar(e) {
+  e.preventDefault();
+  const f = e.target;
+  const name = f.name.value.trim();
+  if (!name) return;
+  addCustomJar({ name, emoji: f.emoji.value, color: f.color.value });
+  closeModal();
+}
+
+function confirmDeleteJar(jarId) {
+  const meta = getJarMeta(jarId);
+  const bal = jarBalance(jarId);
+  if (confirm(`Delete the "${meta.name}" jar? It has ${fmt(bal)} in it. Transactions stay in your history.`)) {
+    deleteCustomJar(jarId);
+  }
+}
+
+function openAvatarModal() {
+  openModal(`
+    <div class="modal-handle"></div>
+    <h3>Choose your avatar</h3>
+    <p class="modal-sub">Pick an emoji that represents you!</p>
+    <div class="emoji-picker" style="grid-template-columns: repeat(6,1fr); gap: 10px; padding: 8px 0;">
+      ${AVATAR_EMOJIS.map(em => `
+        <label class="emoji-pick" onclick="setAvatar('${em}')">
+          <span style="font-size:32px; padding:10px 4px;">${em}</span>
+        </label>
+      `).join('')}
+      <label class="emoji-pick" onclick="setAvatar(null)">
+        <span style="font-size:18px; padding:10px 4px; font-weight:800;">${escape((state.user.name[0] || 'A').toUpperCase())}</span>
+      </label>
+    </div>
+    <button class="modal-close" onclick="closeModal()">Cancel</button>
+  `);
+}
+
+function setAvatar(emoji) {
+  updateUser({ name: state.user.name, avatarEmoji: emoji });
+  closeModal();
+}
+
+function openEditNameModal() {
+  openModal(`
+    <div class="modal-handle"></div>
+    <h3>Change your name</h3>
+    <form onsubmit="submitEditName(event)">
+      <label class="form-label">Display name</label>
+      <input class="form-input" type="text" name="name" required autofocus value="${escape(state.user.name)}" maxlength="20">
+      <div class="form-actions">
+        <button type="button" class="modal-close" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Save</button>
+      </div>
+    </form>
+  `);
+}
+
+function submitEditName(e) {
+  e.preventDefault();
+  const name = e.target.name.value.trim();
+  if (!name) return;
+  updateUser({ name, avatarEmoji: state.user.avatarEmoji });
+  closeModal();
+}
+
+function updateSplitHint() {
+  const form = document.querySelector('#profile form');
+  if (!form) return;
+  const save = parseInt(form.save?.value || 0, 10);
+  const spend = parseInt(form.spend?.value || 0, 10);
+  const give = parseInt(form.give?.value || 0, 10);
+  const sum = save + spend + give;
+  const hint = document.getElementById('splits-hint');
+  if (!hint) return;
+  if (sum === 100) {
+    hint.textContent = '✓ Adds up to 100% — nice!';
+    hint.className = 'splits-hint ok';
+  } else {
+    hint.textContent = `Currently ${sum}% — needs to equal 100%`;
+    hint.className = 'splits-hint error';
+  }
+}
+
+function submitSplits(e) {
+  e.preventDefault();
+  const f = e.target;
+  const save = parseInt(f.save.value, 10);
+  const spend = parseInt(f.spend.value, 10);
+  const give = parseInt(f.give.value, 10);
+  if (save + spend + give !== 100) {
+    updateSplitHint();
+    return;
+  }
+  updateSplits({ save: save / 100, spend: spend / 100, give: give / 100 });
+}
+
 // ---------- Init ----------
 document.addEventListener('DOMContentLoaded', () => {
+  applyTheme();
+
+  document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+
   document.getElementById('reset-btn')?.addEventListener('click', () => {
     if (confirm('Reset all data to demo? Goals, transactions, and schedule items you added will be erased.')) {
       localStorage.removeItem(STORAGE_KEY);
@@ -663,13 +1011,16 @@ document.addEventListener('DOMContentLoaded', () => {
       saveState();
       currentJar = 'save';
       currentGoalId = null;
+      applyTheme();
       navigate('home');
       render();
     }
   });
+
   document.getElementById('modal').addEventListener('click', (e) => {
     if (e.target.id === 'modal') closeModal();
   });
+
   render();
   navigate('home');
 });
@@ -682,8 +1033,18 @@ window.openLogMoneyModal = openLogMoneyModal;
 window.openAddGoalModal = openAddGoalModal;
 window.openAddToGoalModal = openAddToGoalModal;
 window.openAddScheduleModal = openAddScheduleModal;
+window.openAddJarModal = openAddJarModal;
+window.openAvatarModal = openAvatarModal;
+window.openEditNameModal = openEditNameModal;
 window.submitLogMoney = submitLogMoney;
 window.submitAddGoal = submitAddGoal;
 window.submitAddToGoal = submitAddToGoal;
 window.submitAddSchedule = submitAddSchedule;
+window.submitAddJar = submitAddJar;
+window.submitEditName = submitEditName;
+window.submitSplits = submitSplits;
 window.closeModal = closeModal;
+window.toggleTheme = toggleTheme;
+window.setAvatar = setAvatar;
+window.confirmDeleteJar = confirmDeleteJar;
+window.updateSplitHint = updateSplitHint;
